@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>SlipScanner - Powered By Dennisys</title>
+    <!-- React & Babel -->
+    <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js"></script>
+    <!-- Dexie (IndexedDB wrapper) -->
+    <script src="https://unpkg.com/dexie@3.2.4/dist/dexie.js"></script>
+    <!-- Tesseract.js for OCR -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <!-- bcryptjs for password hashing -->
+    <script src="https://cdn.jsdelivr.net/npm/bcryptjs@2.4.3/bcrypt.min.js"></script>
+    <!-- date-fns for date handling -->
+    <script src="https://cdn.jsdelivr.net/npm/date-fns@2.30.0/index.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            background: #1C1917;
+            color: #E7E5E4;
+            padding-bottom: 70px;
+        }
+        /* Dark rustic theme */
+        .app-container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: #292524;
+            min-height: 100vh;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+        .header {
+            background: #1F1A17;
+            padding: 20px;
+            text-align: center;
+            border-bottom: 1px solid #44403C;
+        }
+        .header h1 {
+            font-size: 1.8rem;
+            color: #D97706;
+        }
+        .nav-bar {
+            display: flex;
+            justify-content: space-around;
+            background: #1C1917;
+            padding: 10px 0;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            border-bottom: 1px solid #44403C;
+        }
+        .nav-btn {
+            background: none;
+            border: none;
+            color: #A8A29E;
+            font-size: 1rem;
+            padding: 8px 16px;
+            border-radius: 30px;
+            cursor: pointer;
+            transition: 0.2s;
+            font-weight: 500;
+        }
+        .nav-btn.active {
+            background: #D97706;
+            color: #1F1A17;
+        }
+        .content {
+            padding: 20px;
+        }
+        .card {
+            background: #3C3733;
+            border-radius: 16px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+        input, button, .fake-button {
+            background: #44403C;
+            border: 1px solid #5C5650;
+            padding: 12px 16px;
+            border-radius: 12px;
+            color: #E7E5E4;
+            font-size: 1rem;
+            width: 100%;
+            margin-bottom: 12px;
+        }
+        button {
+            background: #D97706;
+            border: none;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        button:hover {
+            background: #B45309;
+        }
+        .flex-row {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        .chip {
+            background: #44403C;
+            padding: 6px 14px;
+            border-radius: 30px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: 0.1s;
+        }
+        .chip.active {
+            background: #D97706;
+            color: #1F1A17;
+        }
+        .receipt-item {
+            background: #44403C;
+            margin-bottom: 12px;
+            padding: 12px;
+            border-radius: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .receipt-info h4 {
+            font-size: 1rem;
+        }
+        .receipt-info p {
+            font-size: 0.8rem;
+            color: #A8A29E;
+        }
+        .delete-btn {
+            background: #991B1B;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+        }
+        .footer {
+            text-align: center;
+            padding: 16px;
+            font-size: 0.75rem;
+            color: #78716C;
+            border-top: 1px solid #44403C;
+            background: #1F1A17;
+        }
+        .error {
+            color: #F87171;
+            font-size: 0.8rem;
+            margin-top: -8px;
+            margin-bottom: 12px;
+        }
+        .total {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #F59E0B;
+        }
+        @media (max-width: 480px) {
+            .content { padding: 16px; }
+            .nav-btn { font-size: 0.9rem; padding: 6px 12px; }
+        }
+    </style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+    // ---------- IndexedDB setup (Dexie) ----------
+    const db = new Dexie('SlipScannerDB');
+    db.version(1).stores({
+        users: '++id, email',
+        receipts: '++id, userId, date, shopName, price'
+    });
+
+    // Helper: hash password with bcryptjs
+    const hashPassword = (plain) => bcrypt.hashSync(plain, 10);
+    const comparePassword = (plain, hash) => bcrypt.compareSync(plain, hash);
+
+    // Helper: parse receipt text to extract fields
+    function parseReceiptText(text) {
+        const lines = text.split('\n').filter(l => l.trim().length > 0);
+        let shopName = lines.length > 0 ? lines[0].trim() : "Unknown Shop";
+        if (shopName.length > 40) shopName = shopName.substring(0, 40);
+        // Price: look for R 123.45, R123.45, 123.45
+        let price = 0;
+        const priceRegex = /[RZAR]?\s*(\d+\.\d{2})/i;
+        for (let line of lines) {
+            const match = line.match(priceRegex);
+            if (match) {
+                price = parseFloat(match[1]);
+                break;
+            }
+        }
+        // Date: dd/mm/yyyy, mm/dd/yyyy, yyyy-mm-dd
+        let dateObj = new Date();
+        const dateRegex = /(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/;
+        for (let line of lines) {
+            const match = line.match(dateRegex);
+            if (match) {
+                const parsed = new Date(match[1]);
+                if (!isNaN(parsed)) dateObj = parsed;
+                break;
+            }
+        }
+        return { shopName, price, date: dateObj, fullJson: JSON.stringify({ raw: text, lines }) };
+    }
+
+    // ---------- React App ----------
+    const { useState, useEffect, createContext, useContext, useCallback } = React;
+
+    // Auth context
+    const AuthContext = createContext(null);
+
+    function useAuth() {
+        return useContext(AuthContext);
+    }
+
+    // Main App
+    function App() {
+        const [currentUser, setCurrentUser] = useState(null);
+        const [loading, setLoading] = useState(true);
+
+        useEffect(() => {
+            // Check session storage
+            const storedUserId = sessionStorage.getItem('userId');
+            if (storedUserId) {
+                db.users.get(parseInt(storedUserId)).then(user => {
+                    if (user) setCurrentUser({ id: user.id, email: user.email, fullName: user.fullName });
+                    setLoading(false);
+                }).catch(() => setLoading(false));
+            } else {
+                setLoading(false);
+            }
+        }, []);
+
+        const login = async (email, password) => {
+            const user = await db.users.where('email').equals(email).first();
+            if (user && comparePassword(password, user.passwordHash)) {
+                const userData = { id: user.id, email: user.email, fullName: user.fullName };
+                setCurrentUser(userData);
+                sessionStorage.setItem('userId', user.id);
+                return true;
+            }
+            return false;
+        };
+
+        const signup = async (fullName, email, password) => {
+            const existing = await db.users.where('email').equals(email).first();
+            if (existing) return false;
+            const hash = hashPassword(password);
+            const id = await db.users.add({ email, passwordHash: hash, fullName });
+            const userData = { id, email, fullName };
+            setCurrentUser(userData);
+            sessionStorage.setItem('userId', id);
+            return true;
+        };
+
+        const logout = () => {
+            setCurrentUser(null);
+            sessionStorage.removeItem('userId');
+        };
+
+        if (loading) return <div style={{textAlign:'center', padding:'50px'}}>Loading...</div>;
+        if (!currentUser) return <AuthScreen onLogin={login} onSignup={signup} />;
+        return (
+            <AuthContext.Provider value={{ user: currentUser, logout }}>
+                <AuthenticatedApp />
+            </AuthContext.Provider>
+        );
+    }
+
+    // Auth screen (login/register)
+    function AuthScreen({ onLogin, onSignup }) {
+        const [isLogin, setIsLogin] = useState(true);
+        const [email, setEmail] = useState('');
+        const [password, setPassword] = useState('');
+        const [fullName, setFullName] = useState('');
+        const [error, setError] = useState('');
+
+        const handleSubmit = async (e) => {
+            e.preventDefault();
+            setError('');
+            if (isLogin) {
+                const ok = await onLogin(email, password);
+                if (!ok) setError('Invalid email or password');
+            } else {
+                if (!fullName.trim()) { setError('Full name required'); return; }
+                const ok = await onSignup(fullName, email, password);
+                if (!ok) setError('Email already exists');
+            }
+        };
+        return (
+            <div className="app-container">
+                <div className="header"><h1>SlipScanner</h1></div>
+                <div className="content">
+                    <div className="card">
+                        <h3>{isLogin ? 'Login' : 'Create Account'}</h3>
+                        <form onSubmit={handleSubmit}>
+                            {!isLogin && <input type="text" placeholder="Full Name" value={fullName} onChange={e => setFullName(e.target.value)} />}
+                            <input type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} required />
+                            <input type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} required />
+                            {error && <div className="error">{error}</div>}
+                            <button type="submit">{isLogin ? 'Login' : 'Sign Up'}</button>
+                        </form>
+                        <button style={{background:'#44403C', marginTop:'8px'}} onClick={() => { setIsLogin(!isLogin); setError(''); }}>{isLogin ? 'Need an account? Sign up' : 'Already have an account? Login'}</button>
+                    </div>
+                </div>
+                <div className="footer">Powered By Dennisys</div>
+            </div>
+        );
+    }
+
+    // Main authenticated app with tabs
+    function AuthenticatedApp() {
+        const [tab, setTab] = useState('dashboard'); // dashboard, scan, slips, settings
+        const { logout } = useAuth();
+
+        return (
+            <div className="app-container">
+                <div className="header">
+                    <h1>SlipScanner</h1>
+                </div>
+                <div className="nav-bar">
+                    <button className={`nav-btn ${tab === 'dashboard' ? 'active' : ''}`} onClick={() => setTab('dashboard')}>📊 Dashboard</button>
+                    <button className={`nav-btn ${tab === 'scan' ? 'active' : ''}`} onClick={() => setTab('scan')}>📷 Scan</button>
+                    <button className={`nav-btn ${tab === 'slips' ? 'active' : ''}`} onClick={() => setTab('slips')}>📜 Slips</button>
+                    <button className={`nav-btn ${tab === 'settings' ? 'active' : ''}`} onClick={() => setTab('settings')}>⚙️ Settings</button>
+                </div>
+                <div className="content">
+                    {tab === 'dashboard' && <Dashboard />}
+                    {tab === 'scan' && <ScanTab />}
+                    {tab === 'slips' && <SlipsList />}
+                    {tab === 'settings' && <SettingsTab logout={logout} />}
+                </div>
+                <div className="footer">Powered By Dennisys</div>
+            </div>
+        );
+    }
+
+    // Dashboard with filters and total
+    function Dashboard() {
+        const { user } = useAuth();
+        const [receipts, setReceipts] = useState([]);
+        const [filter, setFilter] = useState('weekly'); // daily, weekly, monthly, yearly, custom
+        const [customDate, setCustomDate] = useState('');
+        const [totalSpent, setTotalSpent] = useState(0);
+        const [slipCount, setSlipCount] = useState(0);
+
+        const loadReceipts = useCallback(async () => {
+            let all = await db.receipts.where('userId').equals(user.id).toArray();
+            all.sort((a,b) => new Date(b.date) - new Date(a.date));
+            let filtered = [];
+            const now = new Date();
+            if (filter === 'daily') {
+                const start = new Date(now.setHours(0,0,0,0));
+                const end = new Date(now.setHours(23,59,59,999));
+                filtered = all.filter(r => new Date(r.date) >= start && new Date(r.date) <= end);
+            } else if (filter === 'weekly') {
+                const start = new Date(now);
+                start.setDate(now.getDate() - now.getDay() + (now.getDay()===0?-6:1)); // Monday
+                start.setHours(0,0,0,0);
+                const end = new Date(start);
+                end.setDate(start.getDate()+6);
+                end.setHours(23,59,59,999);
+                filtered = all.filter(r => new Date(r.date) >= start && new Date(r.date) <= end);
+            } else if (filter === 'monthly') {
+                const start = new Date(now.getFullYear(), now.getMonth(), 1);
+                const end = new Date(now.getFullYear(), now.getMonth()+1, 0, 23,59,59,999);
+                filtered = all.filter(r => new Date(r.date) >= start && new Date(r.date) <= end);
+            } else if (filter === 'yearly') {
+                const start = new Date(now.getFullYear(), 0, 1);
+                const end = new Date(now.getFullYear(), 11, 31, 23,59,59,999);
+                filtered = all.filter(r => new Date(r.date) >= start && new Date(r.date) <= end);
+            } else if (filter === 'custom' && customDate) {
+                const target = new Date(customDate);
+                const start = new Date(target.setHours(0,0,0,0));
+                const end = new Date(target.setHours(23,59,59,999));
+                filtered = all.filter(r => new Date(r.date) >= start && new Date(r.date) <= end);
+            } else {
+                filtered = all;
+            }
+            const total = filtered.reduce((sum, r) => sum + (r.price || 0), 0);
+            setTotalSpent(total);
+            setSlipCount(filtered.length);
+            setReceipts(filtered.slice(0, 10)); // show recent 10
+        }, [user.id, filter, customDate]);
+
+        useEffect(() => { loadReceipts(); }, [filter, customDate, loadReceipts]);
+
+        return (
+            <div>
+                <div className="card">
+                    <div className="flex-row" style={{marginBottom:16, flexWrap:'wrap'}}>
+                        {['daily','weekly','monthly','yearly'].map(f => (
+                            <span key={f} className={`chip ${filter === f ? 'active' : ''}`} onClick={() => { setFilter(f); setCustomDate(''); }}>{f.charAt(0).toUpperCase()+f.slice(1)}</span>
+                        ))}
+                        <span className={`chip ${filter === 'custom' ? 'active' : ''}`} onClick={() => setFilter('custom')}>Custom Date</span>
+                    </div>
+                    {filter === 'custom' && (
+                        <input type="date" value={customDate} onChange={e => setCustomDate(e.target.value)} style={{marginBottom:16}} />
+                    )}
+                    <div className="total">R {totalSpent.toFixed(2)}</div>
+                    <div>{slipCount} slip(s)</div>
+                </div>
+                <div className="card">
+                    <h3>Recent Slips</h3>
+                    {receipts.length === 0 && <p>No slips found</p>}
+                    {receipts.map(r => (
+                        <div key={r.id} className="receipt-item">
+                            <div className="receipt-info">
+                                <h4>{r.shopName}</h4>
+                                <p>{new Date(r.date).toLocaleDateString()} • R {r.price.toFixed(2)}</p>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        );
+    }
+
+    // Scan tab: take photo or upload image, OCR, extract, save
+    function ScanTab() {
+        const { user } = useAuth();
+        const [processing, setProcessing] = useState(false);
+        const [preview, setPreview] = useState(null);
+        const [ocrResult, setOcrResult] = useState(null);
+
+        const handleImage = async (file) => {
+            if (!file) return;
+            setPreview(URL.createObjectURL(file));
+            setProcessing(true);
+            setOcrResult(null);
+            try {
+                const { data: { text } } = await Tesseract.recognize(file, 'eng');
+                const parsed = parseReceiptText(text);
+                setOcrResult(parsed);
+            } catch (err) {
+                alert('OCR failed: ' + err.message);
+            } finally {
+                setProcessing(false);
+            }
+        };
+
+        const saveSlip = async () => {
+            if (!ocrResult) return;
+            await db.receipts.add({
+                userId: user.id,
+                shopName: ocrResult.shopName,
+                price: ocrResult.price,
+                date: ocrResult.date,
+                fullJson: ocrResult.fullJson,
+                createdAt: new Date()
+            });
+            alert('Slip saved!');
+            setPreview(null);
+            setOcrResult(null);
+            document.getElementById('imageInput').value = '';
+        };
+
+        return (
+            <div className="card">
+                <h3>Scan Receipt</h3>
+                <input type="file" id="imageInput" accept="image/*" capture="environment" onChange={e => e.target.files[0] && handleImage(e.target.files[0])} />
+                {preview && <img src={preview} alt="preview" style={{maxWidth:'100%', borderRadius:16, margin:'12px 0'}} />}
+                {processing && <div>Processing OCR... please wait</div>}
+                {ocrResult && !processing && (
+                    <div style={{marginTop:16}}>
+                        <p><strong>Shop:</strong> {ocrResult.shopName}</p>
+                        <p><strong>Price:</strong> R {ocrResult.price.toFixed(2)}</p>
+                        <p><strong>Date:</strong> {new Date(ocrResult.date).toLocaleDateString()}</p>
+                        <button onClick={saveSlip}>Save Slip</button>
+                    </div>
+                )}
+            </div>
+        );
+    }
+
+    // Slips list with delete and filter (global)
+    function SlipsList() {
+        const { user } = useAuth();
+        const [slips, setSlips] = useState([]);
+        const [filterType, setFilterType] = useState('all');
+        const [customDate, setCustomDate] = useState('');
+
+        const loadSlips = useCallback(async () => {
+            let all = await db.receipts.where('userId').equals(user.id).toArray();
+            all.sort((a,b) => new Date(b.date) - new Date(a.date));
+            let filtered = [...all];
+            const now = new Date();
+            if (filterType === 'daily') {
+                const start = new Date(now.setHours(0,0,0,0));
+                const end = new Date(now.setHours(23,59,59,999));
+                filtered = all.filter(r => new Date(r.date) >= start && new Date(r.date) <= end);
+            } else if (filterType === 'weekly') {
+                const start = new Date(now);
+                start.setDate(now.getDate() - now.getDay() + (now.getDay()===0?-6:1));
+                start.setHours(0,0,0,0);
+                const end = new Date(start);
+                end.setDate(start.getDate()+6);
+                end.setHours(23,59,59,999);
+                filtered = all.filter(r => new Date(r.date) >= start && new Date(r.date) <= end);
+            } else if (filterType === 'monthly') {
+                const start = new Date(now.getFullYear(), now.getMonth(), 1);
+                const end = new Date(now.getFullYear(), now.getMonth()+1, 0, 23,59,59,999);
+                filtered = all.filter(r => new Date(r.date) >= start && new Date(r.date) <= end);
+            } else if (filterType === 'yearly') {
+                const start = new Date(now.getFullYear(), 0, 1);
+                const end = new Date(now.getFullYear(), 11, 31, 23,59,59,999);
+                filtered = all.filter(r => new Date(r.date) >= start && new Date(r.date) <= end);
+            } else if (filterType === 'custom' && customDate) {
+                const target = new Date(customDate);
+                const start = new Date(target.setHours(0,0,0,0));
+                const end = new Date(target.setHours(23,59,59,999));
+                filtered = all.filter(r => new Date(r.date) >= start && new Date(r.date) <= end);
+            }
+            setSlips(filtered);
+        }, [user.id, filterType, customDate]);
+
+        useEffect(() => { loadSlips(); }, [filterType, customDate, loadSlips]);
+
+        const deleteSlip = async (id) => {
+            await db.receipts.delete(id);
+            loadSlips();
+        };
+
+        return (
+            <div className="card">
+                <div className="flex-row" style={{marginBottom:16}}>
+                    {['all','daily','weekly','monthly','yearly','custom'].map(f => (
+                        <span key={f} className={`chip ${filterType === f ? 'active' : ''}`} onClick={() => { setFilterType(f); if(f!=='custom') setCustomDate(''); }}>{f.charAt(0).toUpperCase()+f.slice(1)}</span>
+                    ))}
+                </div>
+                {filterType === 'custom' && <input type="date" value={customDate} onChange={e => setCustomDate(e.target.value)} style={{marginBottom:16}} />}
+                {slips.length === 0 && <p>No receipts found.</p>}
+                {slips.map(s => (
+                    <div key={s.id} className="receipt-item">
+                        <div className="receipt-info">
+                            <h4>{s.shopName}</h4>
+                            <p>{new Date(s.date).toLocaleDateString()} • R {s.price.toFixed(2)}</p>
+                        </div>
+                        <button className="delete-btn" onClick={() => deleteSlip(s.id)}>Delete</button>
+                    </div>
+                ))}
+            </div>
+        );
+    }
+
+    // Settings tab: notifications toggle, logout
+    function SettingsTab({ logout }) {
+        const [notifEnabled, setNotifEnabled] = useState(false);
+        useEffect(() => {
+            if ('Notification' in window) {
+                setNotifEnabled(Notification.permission === 'granted');
+            }
+        }, []);
+        const requestNotification = async () => {
+            if ('Notification' in window) {
+                const permission = await Notification.requestPermission();
+                setNotifEnabled(permission === 'granted');
+                if (permission === 'granted') {
+                    new Notification('SlipScanner', { body: 'Notifications enabled! You will receive reminders.' });
+                }
+            } else {
+                alert('Notifications not supported');
+            }
+        };
+        const testNotif = () => {
+            if (notifEnabled) {
+                new Notification('SlipScanner', { body: 'This is a test notification.' });
+            } else {
+                alert('Enable notifications first');
+            }
+        };
+        return (
+            <div className="card">
+                <div style={{marginBottom:24}}>
+                    <div className="flex-row" style={{justifyContent:'space-between', alignItems:'center'}}>
+                        <span>Enable Notifications</span>
+                        <button style={{width:'auto', padding:'8px 20px', background: notifEnabled ? '#2E7D32' : '#44403C'}} onClick={requestNotification}>
+                            {notifEnabled ? 'Enabled' : 'Enable'}
+                        </button>
+                    </div>
+                    <button onClick={testNotif} style={{marginTop:12}}>Test Notification</button>
+                </div>
+                <button onClick={() => { logout(); }} style={{background:'#991B1B'}}>Logout</button>
+            </div>
+        );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
