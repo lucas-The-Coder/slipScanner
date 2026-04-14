@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
     <title>SlipScanner - Powered By Dennisys</title>
     <!-- React & Babel -->
     <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.development.js"></script>
@@ -12,8 +12,6 @@
     <script src="https://unpkg.com/dexie@3.2.4/dist/dexie.js"></script>
     <!-- Tesseract.js OCR -->
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-    <!-- bcryptjs -->
-    <script src="https://cdn.jsdelivr.net/npm/bcryptjs@2.4.3/bcrypt.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -21,14 +19,17 @@
             box-sizing: border-box;
         }
         body {
-            font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+            font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
             background: linear-gradient(145deg, #0B1120 0%, #111827 100%);
             min-height: 100vh;
-            padding: 16px;
+            padding: 1.5rem;
+            display: flex;
+            justify-content: center;
+            align-items: center;
         }
-        /* glassmorphic container */
         .app-container {
-            max-width: 550px;
+            max-width: 700px;
+            width: 100%;
             margin: 0 auto;
             background: rgba(18, 25, 45, 0.7);
             backdrop-filter: blur(12px);
@@ -58,17 +59,19 @@
             padding: 0.75rem 0;
             backdrop-filter: blur(8px);
             border-bottom: 1px solid rgba(139, 92, 246, 0.3);
+            flex-wrap: wrap;
         }
         .nav-btn {
             background: none;
             border: none;
             font-weight: 500;
-            font-size: 0.9rem;
+            font-size: 0.95rem;
             padding: 0.5rem 1.2rem;
             border-radius: 2rem;
             color: #CBD5E1;
             cursor: pointer;
-            transition: 0.2s;
+            transition: all 0.2s ease;
+            margin: 0.2rem;
         }
         .nav-btn.active {
             background: linear-gradient(120deg, #3B82F6, #8B5CF6);
@@ -85,9 +88,9 @@
             padding: 1.25rem;
             margin-bottom: 1.25rem;
             border: 1px solid rgba(139, 92, 246, 0.25);
-            box-shadow: 0 8px 20px rgba(0,0,0,0.2);
+            transition: transform 0.1s;
         }
-        input, button, .fake-button {
+        input, button {
             background: #1E293B;
             border: 1px solid #334155;
             padding: 0.75rem 1rem;
@@ -108,7 +111,6 @@
             border: none;
             font-weight: 600;
             cursor: pointer;
-            transition: transform 0.1s, opacity 0.2s;
         }
         button:active {
             transform: scale(0.97);
@@ -197,10 +199,44 @@
             margin-top: 0.5rem;
             text-decoration: underline;
             cursor: pointer;
+            width: auto;
         }
-        @media (max-width: 480px) {
-            .content { padding: 1rem; }
-            .nav-btn { padding: 0.4rem 0.8rem; font-size: 0.8rem; }
+        video {
+            width: 100%;
+            border-radius: 1rem;
+            margin-bottom: 0.5rem;
+            background: #000;
+        }
+        .camera-error {
+            background: rgba(220,38,38,0.2);
+            padding: 0.8rem;
+            border-radius: 1rem;
+            margin: 1rem 0;
+            text-align: center;
+            color: #F87171;
+        }
+        @media (max-width: 550px) {
+            body {
+                padding: 0.8rem;
+            }
+            .content {
+                padding: 1rem;
+            }
+            .nav-btn {
+                font-size: 0.8rem;
+                padding: 0.4rem 0.8rem;
+            }
+            .header h1 {
+                font-size: 1.5rem;
+            }
+            .total {
+                font-size: 1.8rem;
+            }
+        }
+        @media (min-width: 1200px) {
+            .app-container {
+                max-width: 800px;
+            }
         }
     </style>
 </head>
@@ -215,8 +251,9 @@
         receipts: '++id, userId, date, shopName, price'
     });
 
-    const hashPassword = (plain) => bcrypt.hashSync(plain, 10);
-    const comparePassword = (plain, hash) => bcrypt.compareSync(plain, hash);
+    // Simple hash for demo (fast, local only)
+    const hashPassword = (pwd) => btoa(pwd + "slipscanner_salt");
+    const comparePassword = (plain, hash) => hashPassword(plain) === hash;
 
     function parseReceiptText(text) {
         const lines = text.split('\n').filter(l => l.trim().length > 0);
@@ -241,8 +278,7 @@
         return { shopName, price, date: dateObj, fullJson: JSON.stringify({ raw: text, lines }) };
     }
 
-    // React components
-    const { useState, useEffect, createContext, useContext, useCallback } = React;
+    const { useState, useEffect, useRef, createContext, useContext, useCallback } = React;
     const AuthContext = createContext(null);
     function useAuth() { return useContext(AuthContext); }
 
@@ -259,24 +295,34 @@
             } else setLoading(false);
         }, []);
         const login = async (email, pwd) => {
-            const user = await db.users.where('email').equals(email).first();
-            if (user && comparePassword(pwd, user.passwordHash)) {
-                const data = { id: user.id, email: user.email, fullName: user.fullName };
-                setCurrentUser(data);
-                sessionStorage.setItem('userId', user.id);
-                return true;
+            try {
+                const user = await db.users.where('email').equals(email).first();
+                if (user && comparePassword(pwd, user.passwordHash)) {
+                    const data = { id: user.id, email: user.email, fullName: user.fullName };
+                    setCurrentUser(data);
+                    sessionStorage.setItem('userId', user.id);
+                    return true;
+                }
+                return false;
+            } catch (err) {
+                console.error(err);
+                return false;
             }
-            return false;
         };
         const signup = async (fullName, email, pwd) => {
-            const existing = await db.users.where('email').equals(email).first();
-            if (existing) return false;
-            const hash = hashPassword(pwd);
-            const id = await db.users.add({ email, passwordHash: hash, fullName });
-            const data = { id, email, fullName };
-            setCurrentUser(data);
-            sessionStorage.setItem('userId', id);
-            return true;
+            try {
+                const existing = await db.users.where('email').equals(email).first();
+                if (existing) return false;
+                const hash = hashPassword(pwd);
+                const id = await db.users.add({ email, passwordHash: hash, fullName });
+                const data = { id, email, fullName };
+                setCurrentUser(data);
+                sessionStorage.setItem('userId', id);
+                return true;
+            } catch (err) {
+                console.error(err);
+                return false;
+            }
         };
         const logout = () => {
             setCurrentUser(null);
@@ -291,7 +337,6 @@
         );
     }
 
-    // Auth screen – redesigned with better UX
     function AuthScreen({ onLogin, onSignup }) {
         const [isLogin, setIsLogin] = useState(true);
         const [email, setEmail] = useState('');
@@ -304,12 +349,13 @@
             e.preventDefault();
             setError('');
             setLoading(true);
+            let ok;
             if (isLogin) {
-                const ok = await onLogin(email, password);
+                ok = await onLogin(email, password);
                 if (!ok) setError('Invalid email or password');
             } else {
-                if (!fullName.trim()) { setError('Full name is required'); setLoading(false); return; }
-                const ok = await onSignup(fullName, email, password);
+                if (!fullName.trim()) { setError('Full name required'); setLoading(false); return; }
+                ok = await onSignup(fullName, email, password);
                 if (!ok) setError('Email already exists');
             }
             setLoading(false);
@@ -338,7 +384,6 @@
         );
     }
 
-    // Authenticated main app
     function AuthenticatedApp() {
         const [tab, setTab] = useState('dashboard');
         const { logout } = useAuth();
@@ -445,8 +490,60 @@
         const [processing, setProcessing] = useState(false);
         const [preview, setPreview] = useState(null);
         const [ocrResult, setOcrResult] = useState(null);
+        const [cameraActive, setCameraActive] = useState(false);
+        const [cameraError, setCameraError] = useState(null);
+        const videoRef = useRef(null);
+        const canvasRef = useRef(null);
+        const streamRef = useRef(null);
 
-        const handleImage = async (file) => {
+        const startCamera = async () => {
+            setCameraError(null);
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+                if (videoRef.current) {
+                    videoRef.current.srcObject = stream;
+                    streamRef.current = stream;
+                    setCameraActive(true);
+                }
+            } catch (err) {
+                console.error(err);
+                setCameraError('Camera permission denied or not available. Please allow camera access and try again, or use file upload.');
+            }
+        };
+
+        const stopCamera = () => {
+            if (streamRef.current) {
+                streamRef.current.getTracks().forEach(track => track.stop());
+                streamRef.current = null;
+            }
+            setCameraActive(false);
+        };
+
+        const capturePhoto = () => {
+            if (videoRef.current && canvasRef.current) {
+                const video = videoRef.current;
+                const canvas = canvasRef.current;
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+                canvas.toBlob(async (blob) => {
+                    setPreview(URL.createObjectURL(blob));
+                    setProcessing(true);
+                    try {
+                        const { data: { text } } = await Tesseract.recognize(blob, 'eng');
+                        const parsed = parseReceiptText(text);
+                        setOcrResult(parsed);
+                    } catch (err) {
+                        alert('OCR error: ' + err.message);
+                    } finally {
+                        setProcessing(false);
+                        stopCamera();
+                    }
+                }, 'image/jpeg');
+            }
+        };
+
+        const handleFileUpload = async (file) => {
             if (!file) return;
             setPreview(URL.createObjectURL(file));
             setProcessing(true);
@@ -475,16 +572,39 @@
             alert('✅ Receipt saved!');
             setPreview(null);
             setOcrResult(null);
-            document.getElementById('scanInput').value = '';
+            setCameraActive(false);
+            if (streamRef.current) stopCamera();
         };
+
+        useEffect(() => {
+            return () => {
+                if (streamRef.current) {
+                    streamRef.current.getTracks().forEach(track => track.stop());
+                }
+            };
+        }, []);
 
         return (
             <div className="card">
                 <h3>📸 Scan receipt</h3>
-                <input type="file" id="scanInput" accept="image/*" capture="environment" onChange={e => e.target.files[0] && handleImage(e.target.files[0])} />
-                {preview && <img src={preview} alt="preview" style={{maxWidth:'100%', borderRadius:'1rem', margin:'1rem 0'}} />}
+                {!cameraActive ? (
+                    <div>
+                        <button onClick={startCamera}>📷 Open Camera</button>
+                        {cameraError && <div className="camera-error">{cameraError}</div>}
+                        <div style={{margin: '1rem 0', textAlign: 'center', color: '#94A3B8'}}>or upload from gallery</div>
+                        <input type="file" accept="image/*" capture="environment" onChange={e => e.target.files[0] && handleFileUpload(e.target.files[0])} />
+                    </div>
+                ) : (
+                    <div>
+                        <video ref={videoRef} autoPlay playsInline style={{width: '100%', borderRadius: '1rem'}} />
+                        <canvas ref={canvasRef} style={{display: 'none'}} />
+                        <button onClick={capturePhoto} style={{marginTop: '0.5rem'}}>📸 Capture</button>
+                        <button onClick={stopCamera} style={{marginTop: '0.5rem', background: '#475569'}}>Cancel</button>
+                    </div>
+                )}
+                {preview && !cameraActive && <img src={preview} alt="preview" style={{maxWidth:'100%', borderRadius:'1rem', margin:'1rem 0'}} />}
                 {processing && <div>⏳ Reading text from image...</div>}
-                {ocrResult && !processing && (
+                {ocrResult && !processing && !cameraActive && (
                     <div style={{marginTop:'1rem'}}>
                         <p><strong>🏪 Shop:</strong> {ocrResult.shopName}</p>
                         <p><strong>💰 Amount:</strong> R {ocrResult.price.toFixed(2)}</p>
